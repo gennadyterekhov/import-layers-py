@@ -7,3 +7,4 @@ class Config:
     layers: tuple[str, ...]
     debug: bool = False
     root_dir: Path | None = None
+    ignore_tests: bool = False

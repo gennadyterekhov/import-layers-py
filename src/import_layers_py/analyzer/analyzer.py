@@ -1,6 +1,7 @@
 import ast
 from pathlib import Path
 import tokenize
+from typing import TextIO
 
 from import_layers_py.analyzer.import_checker import ImportChecker
 from import_layers_py.dto.analysis_result import AnalysisResult
@@ -14,12 +15,13 @@ class Analyzer:
         self.config = config
         self.checker = ImportChecker(project, config.layers)
 
-    def analyze(self, directories: list[Path]) -> AnalysisResult:
+    def analyze(self, paths: list[Path], *, debug_output: TextIO | None = None) -> AnalysisResult:
         result = AnalysisResult()
-        for path in self.project.source_files(directories):
-            relative_path = path.relative_to(self.project.root).as_posix()
+        for path in self.project.source_files(paths):
+            relative_path = self.project.relative_path(path)
+            result.nodes.add(relative_path)
             if self.config.debug:
-                print(f"processing file {relative_path}")
+                print(f"processing file {relative_path}", file=debug_output)
 
             try:
                 with tokenize.open(path) as source:
@@ -30,6 +32,6 @@ class Analyzer:
             except (OSError, UnicodeError) as error:
                 result.errors.append(f"{relative_path}: {error}")
             else:
-                result.violations.extend(self.checker.check(path, tree))
+                self.checker.check(path, tree, result)
 
         return result
