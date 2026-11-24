@@ -4,7 +4,6 @@ from pathlib import Path
 import sys
 
 from import_layers_py.analyzer.analyzer import Analyzer
-from import_layers_py.analyzer.pipeline import check_graph
 from import_layers_py.config.config_service import CONFIG_NAMES, find_config, read_config
 from import_layers_py.project.project import Project
 
@@ -36,23 +35,22 @@ def main(argv: list[str] | None = None) -> int:
             paths = [cwd / path for path in args.paths] or [root]
         project = Project(root, ignore_tests=config.ignore_tests)
         result = Analyzer(project, config).analyze(
-            paths, debug_output=sys.stderr if args.graph else None, defer_policy=True,
+            paths, debug_output=sys.stderr if args.graph else None,
         )
-        checked = check_graph(project.root, config.layers, result)
     except (OSError, ValueError, RuntimeError) as error:
         print(f"import-layers-py: {error}", file=sys.stderr)
         return 2
 
-    for error in (*result.errors, *checked["violations"]):
+    for error in (*result.errors, *result.violations):
         print(error, file=sys.stderr)
     if args.graph:
         print(json.dumps({
             "nodes": sorted(result.nodes),
-            "edges": checked["edges"],
+            "edges": [{"from": source, "to": target} for source, target in sorted(result.edges)],
         }))
     if result.errors:
         return 2
-    if checked["violations"]:
+    if result.violations:
         return 1
     if not args.graph:
         print("OK")

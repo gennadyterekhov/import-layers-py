@@ -20,8 +20,3 @@ class LayerPolicy:
             if any(module[start:start + len(parts)] == parts for start in range(len(module))):
                 return index
         return None
-
-    def violation(self, source: int | None, target: int | None) -> tuple[str, str] | None:
-        if source is not None and target is not None and source < target:
-            return self.layers[source], self.layers[target]
-        return None

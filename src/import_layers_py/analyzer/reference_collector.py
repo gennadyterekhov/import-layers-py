@@ -7,7 +7,7 @@ from import_layers_py.dto.analysis_result import AnalysisResult
 from import_layers_py.project.project import Project
 
 
-class ImportChecker:
+class ReferenceCollector:
     def __init__(self, project: Project, layers: tuple[str, ...]):
         self.project = project
         self.resolver = ImportResolver(project)
@@ -18,7 +18,7 @@ class ImportChecker:
         directory = module.parent.relative_to(self.project.root).parts
         return self.policy.layer_index(directory, self.project.module_parts(module))
 
-    def check(self, path: Path, tree: ast.Module, result: AnalysisResult, *, defer_policy: bool = False) -> None:
+    def collect(self, path: Path, tree: ast.Module, result: AnalysisResult) -> None:
         source_layer = self.layer_index(path)
         source = self.project.relative_path(path)
 
@@ -34,27 +34,14 @@ class ImportChecker:
             target_file = self.project.module_file(target)
             if target_file is not None and not self.project.is_ignored_test(target_file):
                 destination = self.project.relative_path(target_file)
-                result.nodes.add(destination)
-                if not defer_policy and destination != source:
-                    result.edges.add((source, destination))
 
             target_layer = self.layer_index(target)
-            if defer_policy:
-                result.references.append({
-                    "from": source,
-                    "to": destination if destination != source else "",
-                    "line": imported.line,
-                    "specifier": imported.name,
-                    "fromLayer": self.policy.layers[source_layer] if source_layer is not None else "",
-                    "toLayer": self.policy.layers[target_layer] if target_layer is not None else "",
-                    "resolvedLayers": True,
-                })
-                continue
-
-            violation = self.policy.violation(source_layer, target_layer)
-            if violation is not None:
-                from_layer, to_layer = violation
-                result.violations.append(
-                    f"{source}:{imported.line} -> {imported.name}: cannot import package from lower "
-                    f"layer ({from_layer} -> {to_layer})"
-                )
+            result.references.append({
+                "from": source,
+                "to": destination if destination != source else "",
+                "line": imported.line,
+                "specifier": imported.name,
+                "fromLayer": self.policy.layers[source_layer] if source_layer is not None else "",
+                "toLayer": self.policy.layers[target_layer] if target_layer is not None else "",
+                "resolvedLayers": True,
+            })
