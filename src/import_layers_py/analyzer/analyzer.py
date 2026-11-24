@@ -15,7 +15,7 @@ class Analyzer:
         self.config = config
         self.checker = ImportChecker(project, config.layers)
 
-    def analyze(self, paths: list[Path], *, debug_output: TextIO | None = None) -> AnalysisResult:
+    def analyze(self, paths: list[Path], *, debug_output: TextIO | None = None, defer_policy: bool = False) -> AnalysisResult:
         result = AnalysisResult()
         for path in self.project.source_files(paths):
             relative_path = self.project.relative_path(path)
@@ -32,6 +32,8 @@ class Analyzer:
             except (OSError, UnicodeError) as error:
                 result.errors.append(f"{relative_path}: {error}")
             else:
-                self.checker.check(path, tree, result)
+                if defer_policy:
+                    result.files.append(relative_path)
+                self.checker.check(path, tree, result, defer_policy=defer_policy)
 
         return result
