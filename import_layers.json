@@ -1,0 +1,5 @@
+{
+  "layers": ["dto", "project", "config", "analyzer"],
+  "rootDir": "src",
+  "debug": false
+}
