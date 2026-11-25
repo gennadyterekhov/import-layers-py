@@ -1,5 +1,5 @@
 {
-  "layers": ["dto", "project", "config", "analyzer"],
+  "layers": ["dto", "analyzer.layer_policy", "project", "config", "analyzer"],
   "rootDir": "src",
   "debug": false
 }

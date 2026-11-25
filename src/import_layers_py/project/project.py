@@ -8,6 +8,7 @@ EXCLUDED_DIRS = {
     ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".nox",
     "build", "dist", "node_modules", "site-packages",
 }
+TEST_DIRS = {"test", "tests", "__tests__"}
 
 
 def raise_walk_error(error: OSError) -> None:
@@ -15,31 +16,63 @@ def raise_walk_error(error: OSError) -> None:
 
 
 class Project:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, ignore_tests: bool = False):
         self.root = root.resolve()
         self.src = self.root / "src"
+        self.ignore_tests = ignore_tests
 
-    def source_files(self, directories: list[Path]) -> Iterator[Path]:
+    def source_files(self, paths: list[Path]) -> Iterator[Path]:
         files = set()
-        for directory in directories:
-            start = (self.root / directory).resolve()
-            if not self.includes(start) or not start.is_dir():
-                raise ValueError(f"invalid project directory: {directory}")
-
-            for current, dirs, names in os.walk(start, onerror=raise_walk_error):
-                dirs[:] = [name for name in dirs if name not in EXCLUDED_DIRS]
-                for name in names:
-                    path = Path(current, name)
-                    if path.suffix == ".py" and not path.is_symlink() and path.is_file():
-                        files.add(path)
+        for path in paths:
+            start = (self.root / path).resolve()
+            included = self.includes(start)
+            is_directory = included and start.is_dir()
+            is_python_file = included and start.suffix == ".py" and start.is_file()
+            if not (is_directory or is_python_file):
+                raise ValueError(f"invalid project path: {path}")
+            if self.is_ignored_test(start):
+                continue
+            if is_directory:
+                files.update(self._directory_sources(start))
+            else:
+                files.add(start)
 
         yield from sorted(files)
+
+    def _directory_sources(self, directory: Path) -> Iterator[Path]:
+        for current, dirs, names in os.walk(directory, onerror=raise_walk_error):
+            dirs[:] = [
+                name for name in dirs
+                if name not in EXCLUDED_DIRS and not self.is_ignored_test(Path(current, name))
+            ]
+            for name in names:
+                path = Path(current, name)
+                if (
+                    path.suffix == ".py" and not path.is_symlink()
+                    and path.is_file() and not self.is_ignored_test(path)
+                ):
+                    yield path
+
+    def relative_path(self, path: Path) -> str:
+        return path.relative_to(self.root).as_posix()
 
     def includes(self, path: Path) -> bool:
         return (
             path.is_relative_to(self.root)
             and not EXCLUDED_DIRS.intersection(path.relative_to(self.root).parts)
         )
+
+    def is_ignored_test(self, path: Path) -> bool:
+        return self.ignore_tests and (
+            bool(TEST_DIRS.intersection(path.relative_to(self.root).parts))
+            or (path.suffix == ".py" and (path.name.startswith("test_") or path.name.endswith("_test.py")))
+        )
+
+    def module_file(self, path: Path) -> Path | None:
+        file = (path / "__init__.py").resolve() if path.is_dir() else path
+        if self.includes(file) and file.is_file():
+            return file
+        return None
 
     def module_parts(self, path: Path) -> tuple[str, ...]:
         root = self.src if path.is_relative_to(self.src) else self.root
@@ -55,25 +88,22 @@ class Project:
 
         search_paths = [within] if within is not None else [self.root, self.src]
         for index, part in enumerate(parts):
-            last = index == len(parts) - 1
-            namespaces = []
-            for directory in search_paths:
-                package = (directory / part).resolve()
-                source = (directory / f"{part}.py").resolve()
-                if self.includes(package) and (package / "__init__.py").is_file():
-                    if last:
-                        return package
-                    search_paths = [package]
-                    break
-                if self.includes(source) and source.is_file():
-                    return source if last else None
-                if self.includes(package) and package.is_dir():
-                    namespaces.append(package)
-            else:
-                if not namespaces:
-                    return None
-                if last:
-                    return namespaces[0]
-                search_paths = namespaces
+            search_paths = self._find_module_part(part, search_paths)
+            if not search_paths:
+                return None
+            if index < len(parts) - 1 and not search_paths[0].is_dir():
+                return None
+        return search_paths[0]
 
-        return None
+    def _find_module_part(self, part: str, search_paths: list[Path]) -> list[Path]:
+        namespaces = []
+        for directory in search_paths:
+            package = (directory / part).resolve()
+            source = (directory / f"{part}.py").resolve()
+            if self.includes(package) and package.is_dir():
+                if (package / "__init__.py").is_file():
+                    return [package]
+                namespaces.append(package)
+            if self.includes(source) and source.is_file():
+                return [source]
+        return namespaces

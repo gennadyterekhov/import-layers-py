@@ -21,10 +21,10 @@ class CliTest(unittest.TestCase):
     def write_config(self, name="import_layers.json", **options):
         self.write(name, json.dumps({"layers": ["high", "low"], **options}))
 
-    def run_cli(self, *args):
+    def run_cli(self, *args, cwd=None):
         return subprocess.run(
             [sys.executable, "-m", "import_layers_py", *args],
-            cwd=self.root,
+            cwd=cwd or self.root,
             capture_output=True,
             text=True,
         )
@@ -115,6 +115,116 @@ def load():
         result = self.run_cli("src/app/high")
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn("src/app/high/check.py:1 -> app.low.item", result.stderr)
+
+    def test_discovers_yaml_config_upward_and_accepts_source_file(self):
+        (self.root / "import_layers.json").unlink()
+        self.write("import_layers.yaml", "layers:\n  - high\n  - low\ndebug: true\n")
+        self.write("high/check.py", "import low.item\n")
+        self.write("low/item.py", "pass\n")
+        self.write("high/other.py", "broken syntax!\n")
+
+        result = self.run_cli("check.py", cwd=self.root / "high")
+
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(result.stdout, "processing file high/check.py\n")
+        self.assertIn("high/check.py:1 -> low.item", result.stderr)
+
+    def test_long_config_option_uses_yaml_and_skips_tests(self):
+        self.write("config/layers.yml", "layers: [high, low]\nignoreTests: true\n")
+        self.write("high/check.py", "pass\n")
+        self.write("high/tests/helper.py", "broken syntax!\n")
+        self.write("high/test_example.py", "broken syntax!\n")
+        self.write("high/example_test.py", "broken syntax!\n")
+
+        result = self.run_cli("--config", "config/layers.yml")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "OK\n")
+
+    def test_legacy_ignore_tests_setting_and_validation(self):
+        self.write_config(ignore_tests=True)
+        self.write("tests/test_example.py", "broken syntax!\n")
+        result = self.run_cli()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.write_config(ignoreTests="true")
+        result = self.run_cli()
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("ignoreTests must be a boolean", result.stderr)
+
+    def test_graph_includes_package_targets_outside_selected_path(self):
+        self.write_config(debug=True)
+        self.write("unclassified/check.py", "import low\nimport low.item\nimport sys\n")
+        self.write("low/__init__.py", "pass\n")
+        self.write("low/item.py", "pass\n")
+
+        result = self.run_cli("--graph", "unclassified")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "processing file unclassified/check.py\n")
+        self.assertEqual(json.loads(result.stdout), {
+            "nodes": ["low/__init__.py", "low/item.py", "unclassified/check.py"],
+            "edges": [
+                {"from": "unclassified/check.py", "to": "low/__init__.py"},
+                {"from": "unclassified/check.py", "to": "low/item.py"},
+            ],
+        })
+
+    def test_root_relative_layer_has_priority_over_generic_name(self):
+        self.write_config(layers=["low", "src/app/high", "src/app/low"])
+        self.write("src/app/high/check.py", "from ..low import item\n")
+        self.write("src/app/low/item.py", "pass\n")
+
+        result = self.run_cli()
+
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("(src/app/high -> src/app/low)", result.stderr)
+
+    def test_reports_missing_local_modules_without_reporting_external_imports(self):
+        self.write("high/__init__.py", "pass\n")
+        self.write("high/check.py", "import external.missing\nimport high.missing\nfrom .absent import x\n")
+
+        result = self.run_cli()
+
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("high/check.py:2: unresolved import high.missing", result.stderr)
+        self.assertIn("high/check.py:3: unresolved import high.absent", result.stderr)
+        self.assertNotIn("external", result.stderr)
+
+    def test_checks_literal_dynamic_imports(self):
+        self.write("high/check.py", '''\
+import importlib as il
+from importlib import import_module as load
+il.import_module("low.one")
+load("low.two")
+__import__("low.three")
+load("low." + variable)
+__import__("low.four", level=1)
+''')
+        for name in ("one", "two", "three", "four"):
+            self.write(f"low/{name}.py", "pass\n")
+
+        result = self.run_cli("--graph", "high")
+
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(len(result.stderr.splitlines()), 3)
+        self.assertEqual(json.loads(result.stdout)["edges"], [
+            {"from": "high/check.py", "to": f"low/{name}.py"}
+            for name in ("one", "three", "two")
+        ])
+
+    def test_skips_shadowed_dynamic_import_helpers(self):
+        self.write("high/check.py", '''\
+from importlib import import_module as load
+def run(load):
+    load("low.item")
+__import__ = load_something_else
+__import__("low.item")
+''')
+        self.write("low/item.py", "pass\n")
+
+        result = self.run_cli()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":
