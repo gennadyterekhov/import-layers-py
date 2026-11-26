@@ -7,5 +7,4 @@ class AnalysisResult:
     errors: list[str] = field(default_factory=list)
     nodes: set[str] = field(default_factory=set)
     edges: set[tuple[str, str]] = field(default_factory=set)
-    files: list[str] = field(default_factory=list)
     references: list[dict] = field(default_factory=list)
